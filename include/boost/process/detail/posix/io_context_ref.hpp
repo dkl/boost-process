@@ -66,6 +66,8 @@ struct async_handler_collector
     }
 };
 
+constexpr int status_unavailable = -1;
+
 //Also set's up waiting for the exit, so it can close async stuff.
 struct io_context_ref : handler_base_ext
 {
@@ -98,9 +100,10 @@ struct io_context_ref : handler_base_ext
 
         auto h = [funcs, es](int val, const std::error_code & ec)
         {
-            es->store(val);
+            if (!ec)
+                es->store(val);
             for (auto & func : funcs)
-                func(::boost::process::detail::posix::eval_exit_status(val), ec);
+                func(ec ? status_unavailable : ::boost::process::detail::posix::eval_exit_status(val), ec);
         };
 
         auto sigchld_service = std::make_shared<boost::asio::signal_set>(ios, SIGCHLD);
@@ -109,12 +112,12 @@ struct io_context_ref : handler_base_ext
         *handle_sigchld = [this, pid, h, handle_sigchld, sigchld_service](boost::system::error_code ec, int)
         {
             if (ec)
-                h(-1, ec);
+                h(status_unavailable, ec);
             //check if the child actually is running first
             int status;
             auto pid_res = ::waitpid(pid, &status, WNOHANG);
             if (pid_res < 0)
-                h(-1, get_last_error());
+                h(status_unavailable, get_last_error());
             else if ((pid_res == pid) && (WIFEXITED(status) || WIFSIGNALED(status)))
                 h(status, {}); //successfully exited already
             else //still running

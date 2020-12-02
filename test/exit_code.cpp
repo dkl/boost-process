@@ -157,3 +157,46 @@ BOOST_AUTO_TEST_CASE(async_nowait)
     io_context.run();
     BOOST_CHECK_EQUAL(221, c.exit_code());
 }
+
+BOOST_AUTO_TEST_CASE(running_check_before_exit_handler)
+{
+    // The SIGCHLD handler should be able to deal with the child process already
+    // having been reaped by someone else, such as another completion handler or
+    // work task which was queued on the io_context before the SIGCHLD
+    // handling's completion handler.
+    //
+    // In that case, the SIGCHLD handler should not store a wrong exit status,
+    // because that would overwrite the correct exit status collected by the
+    // previous call to bp::detail::api::is_running(), bp::detail::api::wait(), etc.
+
+    boost::asio::io_context iocontext;
+
+    std::error_code ec;
+    bp::child c{
+        boost::unit_test::framework::master_test_suite().argv[1],
+        "test", "--exit-code", "123",
+        ec,
+        bp::on_exit(
+            [&](int exit_status, const std::error_code &error)
+            {
+                // Even though the SIGCHLD handler's waitpid() may have failed,
+                // it should not overwrite the previously collected exit code.
+                BOOST_CHECK_EQUAL(exit_status, bp::detail::posix::status_unavailable);
+                BOOST_CHECK_EQUAL(c.exit_code(), 123);
+            }
+        ),
+        iocontext
+    };
+
+    boost::asio::defer(iocontext, [&]() {
+        // Wait for child process to exit, before the waitpid() from the SIGCHLD handler runs.
+        // This relies on the io_context to execute this "work" job before the SIGCHLD handler's completion handler.
+        c.wait();
+        BOOST_CHECK_EQUAL(c.exit_code(), 123);
+    });
+
+    BOOST_REQUIRE(!ec);
+    iocontext.run();
+
+    BOOST_CHECK_EQUAL(c.exit_code(), 123);
+}
