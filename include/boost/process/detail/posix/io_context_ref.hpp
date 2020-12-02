@@ -98,9 +98,12 @@ struct io_context_ref : handler_base_ext
 
         auto wh = [funcs, es](int val, const std::error_code & ec)
                 {
-                    es->store(val);
-                    for (auto & func : funcs)
-                        func(::boost::process::detail::posix::eval_exit_status(val), ec);
+                    if (!ec) {
+                        es->store(val);
+                    }
+                    for (auto & func : funcs) {
+                        func(ec ? status_unavailable : ::boost::process::detail::posix::eval_exit_status(val), ec);
+                    }
                 };
 
         sigchld_service.async_wait(exec.pid, std::move(wh));

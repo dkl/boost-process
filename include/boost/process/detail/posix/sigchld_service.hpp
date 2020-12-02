@@ -18,6 +18,8 @@
 
 namespace boost { namespace process { namespace detail { namespace posix {
 
+constexpr int status_unavailable = -1;
+
 class sigchld_service : public boost::asio::detail::service_base<sigchld_service>
 {
     boost::asio::strand<boost::asio::io_context::executor_type> _strand{get_io_context().get_executor()};
@@ -48,7 +50,7 @@ public:
                     int status;
                     auto pid_res = ::waitpid(pid, &status, WNOHANG);
                     if (pid_res < 0)
-                        h(-1, get_last_error());
+                        h(status_unavailable, get_last_error());
                     else if ((pid_res == pid) && (WIFEXITED(status) || WIFSIGNALED(status)))
                         h(status, {}); //successfully exited already
                     else //still running
@@ -88,7 +90,7 @@ void sigchld_service::_handle_signal(const boost::system::error_code & ec)
     if (ec_)
     {
         for (auto & r : _receivers)
-            r.second(-1, ec_);
+            r.second(status_unavailable, ec_);
         return;
     }
 
@@ -97,7 +99,7 @@ void sigchld_service::_handle_signal(const boost::system::error_code & ec)
         int pid = ::waitpid(r.first, &status, WNOHANG);
         if (pid < 0) {
             // error (eg: the process no longer exists)
-            r.second(-1, get_last_error());
+            r.second(status_unavailable, get_last_error());
             r.first = 0; // mark for deletion
         } else if (pid == r.first) {
             r.second(status, ec_);
