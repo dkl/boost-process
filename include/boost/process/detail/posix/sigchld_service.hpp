@@ -94,15 +94,22 @@ void sigchld_service::_handle_signal(const boost::system::error_code & ec)
         return;
     }
 
+    struct handler_to_invoke {
+        std::function<void (int, std::error_code)> handler;
+        int val = status_unavailable;
+        std::error_code ec;
+    };
+    std::vector<handler_to_invoke> completion_handlers_to_invoke;
+
     for (auto & r : _receivers) {
         int status;
         int pid = ::waitpid(r.first, &status, WNOHANG);
         if (pid < 0) {
             // error (eg: the process no longer exists)
-            r.second(status_unavailable, get_last_error());
+            completion_handlers_to_invoke.emplace_back(handler_to_invoke{std::move(r.second), status_unavailable, get_last_error()});
             r.first = 0; // mark for deletion
         } else if (pid == r.first) {
-            r.second(status, ec_);
+            completion_handlers_to_invoke.emplace_back(handler_to_invoke{std::move(r.second), status, ec_});
             r.first = 0; // mark for deletion
         }
         // otherwise the process is still around
@@ -114,6 +121,12 @@ void sigchld_service::_handle_signal(const boost::system::error_code & ec)
                 return p.first == 0;
             }),
             _receivers.end());
+
+    // Invoke completion handlers after updating _receivers list,
+    // because they may modify it by calling async_wait() again.
+    for (const auto &i : completion_handlers_to_invoke) {
+        i.handler(i.val, i.ec);
+    }
 
     if (!_receivers.empty())
     {
